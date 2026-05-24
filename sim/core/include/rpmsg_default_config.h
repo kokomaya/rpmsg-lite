@@ -1,1 +1,3 @@
-// Copy from lib/include/rpmsg_default_config.h for simulation
+/* Redirect to original lib header */
+#pragma once
+#include "../../../../lib/include/rpmsg_default_config.h"

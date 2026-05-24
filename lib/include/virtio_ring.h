@@ -145,7 +145,11 @@ static inline void vring_init(struct vring *vr, uint32_t num, uint8_t *p, uint32
     vr->num   = num;
     vr->desc  = (struct vring_desc *)(void *)p;
     vr->avail = (struct vring_avail *)(void *)(p + num * sizeof(struct vring_desc));
-    vr->used  = (struct vring_used *)(((uintptr_t)&vr->avail->ring[num] + align - 1UL) & ~(align - 1UL));
+    uintptr_t used_addr = ((uintptr_t)&vr->avail->ring[num] + align - 1UL) & ~((uintptr_t)(align - 1UL));
+    /* Use volatile write to prevent compiler from discarding the pointer assignment.
+     * Without this, GCC may optimize away the store even at -O0 due to inline function
+     * aliasing rules on 64-bit targets. */
+    *(volatile struct vring_used **)&vr->used = (struct vring_used *)used_addr;
 }
 
 /*
