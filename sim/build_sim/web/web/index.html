@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RPMsg-Lite Simulator</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Control Bar -->
+    <header id="control-bar">
+        <div class="control-group">
+            <button id="btn-reset" title="Reset simulation">⟲ Reset</button>
+            <button id="btn-init-master" title="Initialize Master">Init Master</button>
+            <button id="btn-init-remote" title="Initialize Remote">Init Remote</button>
+        </div>
+        <div class="control-group mode-controls">
+            <label>Mode:</label>
+            <select id="sel-mode">
+                <option value="normal">▶ Normal</option>
+                <option value="slow" selected>🐌 Slow Motion</option>
+                <option value="step">⏭ Step</option>
+            </select>
+            <label>Delay:</label>
+            <input type="range" id="range-delay" min="100" max="2000" value="500" step="100">
+            <span id="lbl-delay">500ms</span>
+            <button id="btn-step" class="step-btn" disabled>⏭ Step</button>
+        </div>
+        <div class="control-group">
+            <span id="ws-status" class="ws-disconnected">● Disconnected</span>
+        </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main id="main-area">
+        <!-- Master Panel -->
+        <section id="master-panel" class="core-panel">
+            <h2>MASTER</h2>
+            <div class="state-badge" id="master-state">UNINITIALIZED</div>
+            <div class="link-state" id="master-link">Link: DOWN</div>
+
+            <h3>Endpoints</h3>
+            <div id="master-endpoints" class="endpoint-list"></div>
+            <div class="ept-controls">
+                <input type="number" id="master-ept-addr" placeholder="Address" min="1" max="65534">
+                <button id="btn-master-create-ept">+ Create</button>
+            </div>
+
+            <h3>Send Message</h3>
+            <div class="send-controls">
+                <label>From:</label>
+                <select id="master-send-src"></select>
+                <label>To:</label>
+                <input type="number" id="master-send-dst" placeholder="Dst addr" min="1">
+                <label>Data:</label>
+                <input type="text" id="master-send-data" placeholder="Text payload">
+                <button id="btn-master-send">Send →</button>
+            </div>
+        </section>
+
+        <!-- Shared Memory View -->
+        <section id="shmem-panel">
+            <h2>Shared Memory</h2>
+
+            <div class="vring-section">
+                <h3>VRing 0 (Master TX → Remote RX)</h3>
+                <div id="vring0-view" class="vring-view">
+                    <div class="vring-desc" id="vring0-desc"></div>
+                    <div class="vring-avail" id="vring0-avail"></div>
+                    <div class="vring-used" id="vring0-used"></div>
+                </div>
+            </div>
+
+            <div class="vring-section">
+                <h3>VRing 1 (Remote TX → Master RX)</h3>
+                <div id="vring1-view" class="vring-view">
+                    <div class="vring-desc" id="vring1-desc"></div>
+                    <div class="vring-avail" id="vring1-avail"></div>
+                    <div class="vring-used" id="vring1-used"></div>
+                </div>
+            </div>
+
+            <h3>Buffers</h3>
+            <div id="buffer-view" class="buffer-grid"></div>
+        </section>
+
+        <!-- Remote Panel -->
+        <section id="remote-panel" class="core-panel">
+            <h2>REMOTE</h2>
+            <div class="state-badge" id="remote-state">UNINITIALIZED</div>
+            <div class="link-state" id="remote-link">Link: DOWN</div>
+
+            <h3>Endpoints</h3>
+            <div id="remote-endpoints" class="endpoint-list"></div>
+            <div class="ept-controls">
+                <input type="number" id="remote-ept-addr" placeholder="Address" min="1" max="65534">
+                <button id="btn-remote-create-ept">+ Create</button>
+            </div>
+
+            <h3>Send Message</h3>
+            <div class="send-controls">
+                <label>From:</label>
+                <select id="remote-send-src"></select>
+                <label>To:</label>
+                <input type="number" id="remote-send-dst" placeholder="Dst addr" min="1">
+                <label>Data:</label>
+                <input type="text" id="remote-send-data" placeholder="Text payload">
+                <button id="btn-remote-send">← Send</button>
+            </div>
+        </section>
+    </main>
+
+    <!-- Event Timeline -->
+    <footer id="timeline">
+        <div class="timeline-header">
+            <h3>Event Timeline</h3>
+            <button id="btn-clear-log">Clear</button>
+        </div>
+        <div id="event-log" class="event-log"></div>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>
