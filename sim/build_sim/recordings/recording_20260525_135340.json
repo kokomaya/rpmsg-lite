@@ -1,0 +1,64 @@
+{
+  "snapshots": [
+    {
+      "state": {
+        "master": {
+          "endpoints": [],
+          "link_state": 0,
+          "initialized": false
+        },
+        "mode": "normal",
+        "remote": {
+          "endpoints": [],
+          "link_state": 0,
+          "initialized": false
+        }
+      },
+      "trigger": "recording_start",
+      "timestamp": 0
+    },
+    {
+      "state": {
+        "master": {
+          "endpoints": [],
+          "link_state": 1,
+          "initialized": true
+        },
+        "buffer_count": 4,
+        "mode": "normal",
+        "shmem_size": 4608,
+        "remote": {
+          "endpoints": [],
+          "link_state": 0,
+          "initialized": false
+        }
+      },
+      "trigger": "state_update",
+      "timestamp": 1050
+    }
+  ],
+  "version": 2,
+  "actions": [
+    {
+      "timestamp": 1000,
+      "cmd": {
+        "cmd": "init_master"
+      }
+    },
+    {
+      "timestamp": 2000,
+      "cmd": {
+        "cmd": "init_remote"
+      }
+    },
+    {
+      "timestamp": 3000,
+      "cmd": {
+        "addr": 10,
+        "cmd": "create_ept",
+        "core": "master"
+      }
+    }
+  ],
+  "timestamp": "2026-05-25T13:50:00Z"
+}

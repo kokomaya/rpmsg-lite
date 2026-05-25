@@ -1,0 +1,1 @@
+{"version":2,"timestamp":"2026-05-25T00:00:00Z","actions":[{"timestamp":100,"cmd":{"cmd":"test"}}],"snapshots":[{"timestamp":0,"trigger":"test","state":{"master":{"initialized":false}}}]}

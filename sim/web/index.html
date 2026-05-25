@@ -13,6 +13,8 @@
             <button id="btn-reset" title="Reset simulation">⟲ Reset</button>
             <button id="btn-init-master" title="Initialize Master">Init Master</button>
             <button id="btn-init-remote" title="Initialize Remote">Init Remote</button>
+            <button id="btn-deinit-master" title="Deinit Master">Deinit M</button>
+            <button id="btn-deinit-remote" title="Deinit Remote">Deinit R</button>
         </div>
         <div class="control-group mode-controls">
             <label>Mode:</label>
@@ -66,24 +68,26 @@
             <h2>Shared Memory</h2>
 
             <div class="vring-section">
-                <h3>VRing 0 (Master TX → Remote RX)</h3>
-                <div id="vring0-view" class="vring-view">
-                    <div class="vring-desc" id="vring0-desc"></div>
-                    <div class="vring-avail" id="vring0-avail"></div>
-                    <div class="vring-used" id="vring0-used"></div>
+                <h3>VRing 1 — Master TX → Remote RX  (master.tvq / remote.rvq)</h3>
+                <div class="vring-meta" id="vring-m2r-meta"></div>
+                <div id="vring-m2r-view" class="vring-view">
+                    <div class="vring-desc"  id="vring-m2r-desc"></div>
+                    <div class="vring-avail" id="vring-m2r-avail"></div>
+                    <div class="vring-used"  id="vring-m2r-used"></div>
                 </div>
             </div>
 
             <div class="vring-section">
-                <h3>VRing 1 (Remote TX → Master RX)</h3>
-                <div id="vring1-view" class="vring-view">
-                    <div class="vring-desc" id="vring1-desc"></div>
-                    <div class="vring-avail" id="vring1-avail"></div>
-                    <div class="vring-used" id="vring1-used"></div>
+                <h3>VRing 0 — Remote TX → Master RX  (remote.tvq / master.rvq)</h3>
+                <div class="vring-meta" id="vring-r2m-meta"></div>
+                <div id="vring-r2m-view" class="vring-view">
+                    <div class="vring-desc"  id="vring-r2m-desc"></div>
+                    <div class="vring-avail" id="vring-r2m-avail"></div>
+                    <div class="vring-used"  id="vring-r2m-used"></div>
                 </div>
             </div>
 
-            <h3>Buffers</h3>
+            <h3>Buffers <span class="legend"><span class="dot buf-pool"></span>pool <span class="dot buf-inflight"></span>in-flight <span class="dot buf-free"></span>free</span></h3>
             <div id="buffer-view" class="buffer-grid"></div>
         </section>
 

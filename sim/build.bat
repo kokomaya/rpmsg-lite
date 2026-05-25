@@ -11,7 +11,7 @@ if not exist "%BUILD_DIR%" mkdir "%BUILD_DIR%"
 
 echo Building RPMsg-Lite Simulator...
 
-%GCC% -Wall -Wno-unused-parameter -O2 -std=c11 ^
+%GCC% -Wall -Wno-unused-parameter -O2 -std=c11 -pipe ^
     -DRL_USE_STATIC_API=1 -DSIM_BUILD=1 -D_CRT_SECURE_NO_WARNINGS -DMG_ENABLE_WINSOCK=1 -DMG_ENABLE_LOG=0 ^
     -I"%LIB_DIR%\include" ^
     -I"%SCRIPT_DIR%backend" ^
@@ -28,7 +28,8 @@ echo Building RPMsg-Lite Simulator...
     "%SCRIPT_DIR%backend\sim_events.c" ^
     "%SCRIPT_DIR%third_party\mongoose\mongoose.c" ^
     -lws2_32 ^
-    -o "%BUILD_DIR%\rpmsg_sim.exe"
+    -o "%BUILD_DIR%\rpmsg_sim.exe" 2> "%BUILD_DIR%\gcc.err"
+if exist "%BUILD_DIR%\gcc.err" type "%BUILD_DIR%\gcc.err"
 
 if %ERRORLEVEL% NEQ 0 (
     echo BUILD FAILED

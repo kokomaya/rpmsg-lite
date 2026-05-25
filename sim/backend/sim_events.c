@@ -211,8 +211,8 @@ void sim_event_record_msg(sim_event_type_t type, const char *core, const char *d
     evt.dst = dst;
     evt.buffer_len = len;
 
-    /* Convert first bytes to hex preview */
-    uint32_t preview_bytes = payload_len > 24 ? 24 : payload_len;
+    /* Convert full payload to hex */
+    uint32_t preview_bytes = payload_len > 496 ? 496 : payload_len;
     for (uint32_t i = 0; i < preview_bytes && payload; i++)
     {
         snprintf(evt.payload_preview + i * 2, 3, "%02x", payload[i]);

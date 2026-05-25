@@ -49,7 +49,7 @@ typedef struct
     uint16_t avail_idx;
     uint16_t used_idx;
     uint32_t buffer_len;
-    char payload_preview[64]; /* First N bytes as hex string */
+    char payload_preview[1024]; /* Full payload as hex string */
 } sim_event_t;
 
 /* Initialize event system */

@@ -6,6 +6,7 @@
 #include "rpmsg_platform.h"
 #include "rpmsg_env.h"
 #include "sim_platform.h"
+#include "sim_env.h"
 #include "sim_events.h"
 #include "sim_core.h"
 
@@ -62,32 +63,44 @@ int32_t platform_in_isr(void)
 }
 
 /*
- * platform_notify - This is the core IPC simulation.
- * When one side calls virtqueue_kick(), it ultimately calls this function.
- * We simulate the "interrupt" by directly invoking env_isr on the OTHER side's vector.
+ * platform_notify - core of the IPC simulation.
  *
- * VQ ID encoding: bit0 = queue_id (0=RX, 1=TX), rest = link_id
- * Master TX vq has queue_index=0, Remote TX vq has queue_index=1
+ * When one side calls virtqueue_kick(), the library calls us via
+ * vq->notify_fc(). In real hardware this would trigger an IPI on the other
+ * core. Here we directly invoke that core's ISR.
  *
- * When master kicks its TX queue (vq_queue_index=0):
- *   vector_id = RL_GET_VQ_ID(0, 0) = 0  -> should trigger remote's RX = vector 0
+ * Vector layout (single link, RL_PLATFORM_SIM_LINK_ID = 0):
+ *   vector 0 = vqs[0]: master's RVQ / remote's TVQ -> direction: remote->master
+ *   vector 1 = vqs[1]: master's TVQ / remote's RVQ -> direction: master->remote
  *
- * When remote kicks its TX queue (vq_queue_index=1):
- *   vector_id = RL_GET_VQ_ID(0, 1) = 1  -> should trigger master's RX = vector 1
+ * Source-of-kick rules (sender always "kicks its own producer view"):
+ *   master sends -> kicks tvq (vector_id=1) -> wakes remote's rvq (vector 1)
+ *   remote sends -> kicks tvq (vector_id=0) -> wakes master's rvq (vector 0)
+ *   master init  -> kicks rvq (vector_id=0) -> wakes remote's tvq (vector 0,
+ *                   rpmsg_lite_tx_callback) -> sets remote->link_state=1
+ *   remote rx-freed (consumed_buf_notif) -> kicks rvq -> wakes the other side
+ *
+ * sim_env::env_isr() reads sim_env_get_current_core() to decide who the
+ * "other" core is, so the caller must have set its core via
+ * sim_env_set_current_core() before invoking the library API. Nested kicks
+ * (e.g. from inside an ISR) use the push/pop stack so routing stays correct.
  */
 void platform_notify(uint32_t vector_id)
 {
-    /* Record the notification event */
-    sim_event_record_vring(SIM_EVT_PLATFORM_NOTIFY,
-                           (vector_id & 1) ? "remote" : "master",
-                           "notify", 0, 0, (uint16_t)vector_id);
+    int src_core = sim_env_get_current_core();
+    const char *src_name = (src_core == SIM_CORE_MASTER) ? "master" : "remote";
 
-    /* Apply slow-motion delay */
+    sim_event_record_vring(SIM_EVT_VRING_KICK, src_name, "kick",
+                           0, 0, (uint16_t)vector_id);
+
+    /* Slow-mode delay between sender-side work and ISR delivery so the user
+     * actually sees the kick happen, then the rx callback happen. Step mode
+     * pauses the worker thread but the main poll loop keeps pushing events. */
     sim_apply_delay();
 
-    /* Directly invoke the ISR on the target vector.
-     * In real hardware, this would be an inter-processor interrupt.
-     * The vector_id maps directly to the registered ISR data. */
+    sim_event_record_vring(SIM_EVT_PLATFORM_NOTIFY, src_name, "notify",
+                           0, 0, (uint16_t)vector_id);
+
     env_isr(vector_id);
 }
 

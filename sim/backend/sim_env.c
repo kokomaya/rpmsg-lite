@@ -26,10 +26,50 @@ uint8_t *g_sim_shmem_base = NULL;
 uint32_t g_sim_shmem_size = 0;
 volatile int g_sim_link_up_signal = 0;
 
-/* ISR registry */
+/* ISR registry - separate tables per core (simulates separate interrupt controllers) */
 #define MAX_ISR_VECTORS 8
-static void *g_isr_table[MAX_ISR_VECTORS] = {0};
-static int g_isr_enabled[MAX_ISR_VECTORS] = {0};
+static void *g_isr_table[2][MAX_ISR_VECTORS] = {{0}};
+static int g_isr_enabled[2][MAX_ISR_VECTORS] = {{0}};
+
+/* Current core context (set before each rpmsg operation).
+ * We keep a small stack so that nested ISR dispatch (kick -> notify -> isr ->
+ * possibly kick again) correctly reflects "which core is currently executing". */
+#define CORE_STACK_DEPTH 8
+static int g_core_stack[CORE_STACK_DEPTH] = { SIM_CORE_MASTER };
+static int g_core_sp = 0;
+
+void sim_env_set_current_core(int core_id)
+{
+    g_core_stack[g_core_sp] = core_id;
+}
+
+int sim_env_get_current_core(void)
+{
+    return g_core_stack[g_core_sp];
+}
+
+void sim_env_push_core(int core_id)
+{
+    if (g_core_sp + 1 < CORE_STACK_DEPTH)
+    {
+        g_core_sp++;
+        g_core_stack[g_core_sp] = core_id;
+    }
+}
+
+void sim_env_pop_core(void)
+{
+    if (g_core_sp > 0)
+        g_core_sp--;
+}
+
+int sim_env_isr_ready(int target_core, uint32_t vector_id)
+{
+    if (target_core < 0 || target_core > 1) return 0;
+    if (vector_id >= MAX_ISR_VECTORS) return 0;
+    return (g_isr_table[target_core][vector_id] != NULL) &&
+           (g_isr_enabled[target_core][vector_id] != 0);
+}
 
 /* Simple queue implementation for simulation */
 typedef struct sim_queue
@@ -261,7 +301,7 @@ void env_register_isr(uint32_t vector_id, void *data)
 {
     if (vector_id < MAX_ISR_VECTORS)
     {
-        g_isr_table[vector_id] = data;
+        g_isr_table[sim_env_get_current_core()][vector_id] = data;
     }
 }
 
@@ -269,7 +309,7 @@ void env_unregister_isr(uint32_t vector_id)
 {
     if (vector_id < MAX_ISR_VECTORS)
     {
-        g_isr_table[vector_id] = NULL;
+        g_isr_table[sim_env_get_current_core()][vector_id] = NULL;
     }
 }
 
@@ -277,7 +317,7 @@ void env_enable_interrupt(uint32_t vector_id)
 {
     if (vector_id < MAX_ISR_VECTORS)
     {
-        g_isr_enabled[vector_id] = 1;
+        g_isr_enabled[sim_env_get_current_core()][vector_id] = 1;
     }
 }
 
@@ -285,7 +325,7 @@ void env_disable_interrupt(uint32_t vector_id)
 {
     if (vector_id < MAX_ISR_VECTORS)
     {
-        g_isr_enabled[vector_id] = 0;
+        g_isr_enabled[sim_env_get_current_core()][vector_id] = 0;
     }
 }
 
@@ -295,12 +335,21 @@ void env_disable_interrupt(uint32_t vector_id)
 
 void env_isr(uint32_t vector_id)
 {
-    if (vector_id < MAX_ISR_VECTORS && g_isr_table[vector_id] && g_isr_enabled[vector_id])
+    /* In real hardware, platform_notify sends an interrupt to the OTHER core.
+     * So we invoke the ISR registered by the opposite core.
+     * During ISR dispatch we *push* the target core as current so that any
+     * nested kick coming from inside the ISR is routed back to us correctly. */
+    int origin_core = sim_env_get_current_core();
+    int target_core = (origin_core == SIM_CORE_MASTER) ? SIM_CORE_REMOTE : SIM_CORE_MASTER;
+
+    if (vector_id < MAX_ISR_VECTORS && g_isr_table[target_core][vector_id] && g_isr_enabled[target_core][vector_id])
     {
-        struct virtqueue *vq = (struct virtqueue *)g_isr_table[vector_id];
+        struct virtqueue *vq = (struct virtqueue *)g_isr_table[target_core][vector_id];
         if (vq->callback_fc)
         {
+            sim_env_push_core(target_core);
             vq->callback_fc(vq);
+            sim_env_pop_core();
         }
     }
 }

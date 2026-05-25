@@ -1,10 +1,19 @@
 /**
  * RPMsg-Lite Web Simulator - Main Application
- * Handles WebSocket communication and UI updates.
+ *
+ * UI behavior
+ * -----------
+ * The backend now drives the UI: every batch of events is followed by a
+ * single full state snapshot. The frontend does NOT poll get_state or
+ * request state per-event. This avoids state-message races (older state
+ * overwriting newer) under slow-motion mode.
+ *
+ * VRing 0 (vqs[0]) is master.rvq / remote.tvq -> direction: remote -> master
+ * VRing 1 (vqs[1]) is master.tvq / remote.rvq -> direction: master -> remote
  */
 
 // ============================================================================
-// WebSocket Connection
+// WebSocket
 // ============================================================================
 
 let ws = null;
@@ -14,56 +23,36 @@ let currentState = null;
 function wsConnect() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const url = `${protocol}//${window.location.host}/ws`;
-
     ws = new WebSocket(url);
 
     ws.onopen = () => {
-        console.log('[WS] Connected');
         updateWsStatus(true);
-        // Request initial state
         wsSend({ cmd: 'get_state' });
     };
-
     ws.onclose = () => {
-        console.log('[WS] Disconnected');
         updateWsStatus(false);
-        // Auto-reconnect
         wsReconnectTimer = setTimeout(wsConnect, 2000);
     };
-
-    ws.onerror = (err) => {
-        console.error('[WS] Error:', err);
-    };
-
-    ws.onmessage = (event) => {
-        try {
-            const msg = JSON.parse(event.data);
-            handleMessage(msg);
-        } catch (e) {
-            console.error('[WS] Parse error:', e, event.data);
-        }
+    ws.onerror = (e) => console.error('[WS] error', e);
+    ws.onmessage = (e) => {
+        try { handleMessage(JSON.parse(e.data)); }
+        catch (err) { console.error('[WS] parse error', err, e.data); }
     };
 }
 
 function wsSend(obj) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
+    if (ws && ws.readyState === WebSocket.OPEN)
         ws.send(JSON.stringify(obj));
-    }
 }
 
 function updateWsStatus(connected) {
     const el = document.getElementById('ws-status');
-    if (connected) {
-        el.textContent = '● Connected';
-        el.className = 'ws-connected';
-    } else {
-        el.textContent = '● Disconnected';
-        el.className = 'ws-disconnected';
-    }
+    el.textContent = connected ? '● Connected' : '● Disconnected';
+    el.className = connected ? 'ws-connected' : 'ws-disconnected';
 }
 
 // ============================================================================
-// Message Handler
+// Message dispatch
 // ============================================================================
 
 function handleMessage(msg) {
@@ -71,68 +60,62 @@ function handleMessage(msg) {
         case 'state':
             currentState = msg.state;
             updateUI();
+            recordStateSnapshot('state_update', null);
             break;
         case 'event':
             appendEvent(msg.event);
-            // Track received messages
-            if (msg.event.type === 'rx_callback') {
-                appendRxMessage(msg.event);
-            }
-            // Request fresh state after each event
-            wsSend({ cmd: 'get_state' });
+            if (msg.event.type === 'rx_callback') appendRxMessage(msg.event);
+            recordStateSnapshot('event', msg.event);
+            // backend pushes a fresh state after each event batch; no polling.
             break;
         case 'ok':
-            // Command succeeded, request state
-            wsSend({ cmd: 'get_state' });
+        case 'queued':
+            // nothing — state will arrive separately
             break;
         case 'error':
             appendLog(`ERROR: ${msg.msg}`, 'error');
             break;
         case 'waiting_step':
-            document.getElementById('btn-step').disabled = false;
-            document.getElementById('btn-step').classList.add('waiting-step');
+            const btn = document.getElementById('btn-step');
+            btn.disabled = false;
+            btn.classList.add('waiting-step');
             break;
     }
 }
 
 // ============================================================================
-// UI Update
+// Render
 // ============================================================================
 
 function updateUI() {
     if (!currentState) return;
 
-    // Update Master panel
     updateCorePanel('master', currentState.master);
-
-    // Update Remote panel
     updateCorePanel('remote', currentState.remote);
 
-    // Update VRing views
-    if (currentState.master && currentState.master.tvq) {
-        updateVringView('vring0', currentState.master.tvq);
-    }
-    if (currentState.master && currentState.master.rvq) {
-        updateVringView('vring1', currentState.master.rvq);
-    }
+    // VRing 1 = master.tvq = remote.rvq  -> direction master -> remote
+    // VRing 0 = master.rvq = remote.tvq  -> direction remote -> master
+    const m2rVq = (currentState.master && currentState.master.tvq) ||
+                  (currentState.remote && currentState.remote.rvq);
+    const r2mVq = (currentState.remote && currentState.remote.tvq) ||
+                  (currentState.master && currentState.master.rvq);
 
-    // Update buffer view
-    if (currentState.buffers) {
-        updateBufferView(currentState.buffers);
-    }
+    if (m2rVq) updateVringView('vring-m2r', m2rVq);
+    if (r2mVq) updateVringView('vring-r2m', r2mVq);
 
-    // Update mode controls
+    if (currentState.buffers) updateBufferView(currentState.buffers);
+
     const modeEl = document.getElementById('sel-mode');
-    if (currentState.mode && modeEl.value !== currentState.mode) {
+    if (currentState.mode && modeEl.value !== currentState.mode)
         modeEl.value = currentState.mode;
-    }
 
-    // Step button state
+    const stepBtn = document.getElementById('btn-step');
     if (currentState.step_pending) {
-        document.getElementById('btn-step').disabled = false;
-        document.getElementById('btn-step').classList.add('waiting-step');
+        stepBtn.disabled = false;
+        stepBtn.classList.add('waiting-step');
     } else {
-        document.getElementById('btn-step').classList.remove('waiting-step');
+        stepBtn.disabled = currentState.mode !== 'step';
+        stepBtn.classList.remove('waiting-step');
     }
 }
 
@@ -158,12 +141,12 @@ function updateCorePanel(core, state) {
         linkEl.classList.remove('up');
     }
 
-    // Endpoints
     eptsEl.innerHTML = '';
+    const prevSrcValue = srcEl.value;
     srcEl.innerHTML = '';
+
     if (state.endpoints) {
         state.endpoints.forEach(ept => {
-            // Endpoint item
             const div = document.createElement('div');
             div.className = 'endpoint-item';
             div.innerHTML = `
@@ -172,113 +155,144 @@ function updateCorePanel(core, state) {
             `;
             eptsEl.appendChild(div);
 
-            // Send source option
             const opt = document.createElement('option');
             opt.value = ept.addr;
             opt.textContent = `EPT:${ept.addr}`;
             srcEl.appendChild(opt);
         });
     }
+
+    if (prevSrcValue && srcEl.querySelector(`option[value="${prevSrcValue}"]`))
+        srcEl.value = prevSrcValue;
+}
+
+// Map backend desc.state -> css class
+function descStateClass(state) {
+    switch (state) {
+        case 'avail': return 'state-avail';
+        case 'used':  return 'state-used';
+        default:      return 'state-free';
+    }
 }
 
 function updateVringView(prefix, vq) {
     if (!vq) return;
 
-    const descEl = document.getElementById(`${prefix}-desc`);
+    const descEl  = document.getElementById(`${prefix}-desc`);
     const availEl = document.getElementById(`${prefix}-avail`);
-    const usedEl = document.getElementById(`${prefix}-used`);
+    const usedEl  = document.getElementById(`${prefix}-used`);
+    const metaEl  = document.getElementById(`${prefix}-meta`);
 
-    // Descriptors
+    if (metaEl) {
+        metaEl.textContent =
+            `name=${vq.name}  n=${vq.nentries}  ` +
+            `desc_head=${vq.desc_head_idx}  avail_cursor=${vq.avail_idx}  ` +
+            `used_cons=${vq.used_cons_idx}  queued=${vq.queued_cnt}`;
+    }
+
+    // Descriptors (driven by backend-supplied state per slot)
     descEl.innerHTML = '<span class="vring-label">Desc:</span>';
     if (vq.desc) {
         vq.desc.forEach((d, i) => {
             const cell = document.createElement('div');
-            cell.className = 'desc-cell';
-            // Determine if this descriptor is free or in-use
-            const isFree = isDescFree(vq, i);
-            cell.classList.add(isFree ? 'free' : 'in-use');
+            cell.className = 'desc-cell ' + descStateClass(d.state);
             cell.textContent = i;
-            cell.title = `addr:0x${d.addr.toString(16)} len:${d.len} flags:${d.flags} next:${d.next}`;
+            cell.title =
+                `desc[${i}]\n` +
+                `addr=0x${d.addr.toString(16)} len=${d.len} ` +
+                `flags=${d.flags} next=${d.next}\n` +
+                `state=${d.state}`;
             descEl.appendChild(cell);
         });
     }
 
-    // Available ring
-    availEl.innerHTML = '<span class="vring-label">Avail:</span>';
+    // Available ring — highlight the window between consumer cursor and producer idx
+    availEl.innerHTML = '';
+    const availLabel = document.createElement('span');
+    availLabel.className = 'vring-label';
+    availLabel.textContent = `Avail idx=${vq.avail.idx} (cur=${vq.avail_idx})`;
+    availEl.appendChild(availLabel);
+
     if (vq.avail) {
-        const idxSpan = document.createElement('span');
-        idxSpan.className = 'vring-label';
-        idxSpan.textContent = `idx=${vq.avail.idx}`;
-        availEl.appendChild(idxSpan);
+        const n = vq.nentries;
+        const fromA = vq.avail_idx & (n - 1);
+        const cntA = (vq.avail.idx - vq.avail_idx) & 0xFFFF;
         vq.avail.ring.forEach((val, i) => {
             const cell = document.createElement('div');
             cell.className = 'ring-cell';
-            if (i < vq.avail.idx % vq.nentries || (vq.avail.idx > vq.nentries && i < vq.nentries)) {
-                cell.classList.add('active');
-            }
+            // Highlight slots in the "pending for consumer" window
+            const inWindow = isInRingWindow(i, fromA, cntA, n);
+            if (inWindow) cell.classList.add('active');
             cell.textContent = val;
+            cell.title = `avail.ring[${i}] = desc ${val}`;
             availEl.appendChild(cell);
         });
     }
 
     // Used ring
-    usedEl.innerHTML = '<span class="vring-label">Used:</span>';
+    usedEl.innerHTML = '';
+    const usedLabel = document.createElement('span');
+    usedLabel.className = 'vring-label';
+    usedLabel.textContent = `Used idx=${vq.used.idx} (cur=${vq.used_cons_idx})`;
+    usedEl.appendChild(usedLabel);
+
     if (vq.used) {
-        const idxSpan = document.createElement('span');
-        idxSpan.className = 'vring-label';
-        idxSpan.textContent = `idx=${vq.used.idx}`;
-        usedEl.appendChild(idxSpan);
+        const n = vq.nentries;
+        const fromU = vq.used_cons_idx & (n - 1);
+        const cntU = (vq.used.idx - vq.used_cons_idx) & 0xFFFF;
         vq.used.ring.forEach((item, i) => {
             const cell = document.createElement('div');
             cell.className = 'ring-cell';
-            if (i < vq.used.idx % vq.nentries) {
-                cell.classList.add('active');
-            }
+            const inWindow = isInRingWindow(i, fromU, cntU, n);
+            if (inWindow) cell.classList.add('active');
             cell.textContent = `${item.id}`;
-            cell.title = `id:${item.id} len:${item.len}`;
+            cell.title = `used.ring[${i}] -> desc ${item.id} len=${item.len}`;
             usedEl.appendChild(cell);
         });
     }
 }
 
-function isDescFree(vq, idx) {
-    // Walk the free chain from desc_head_idx
-    let head = vq.desc_head_idx;
-    let visited = new Set();
-    while (head < vq.nentries && !visited.has(head)) {
-        if (head === idx) return true;
-        visited.add(head);
-        if (vq.desc[head]) {
-            head = vq.desc[head].next;
-        } else {
-            break;
-        }
+function isInRingWindow(pos, from, cnt, n) {
+    if (cnt <= 0) return false;
+    if (cnt >= n) return true;
+    for (let k = 0; k < cnt; k++) {
+        if (((from + k) & (n - 1)) === pos) return true;
     }
     return false;
 }
+
+// Buffer classification -> css class + label
+const BUFFER_STATE_META = {
+    m_tx_pool:     { cls: 'buf-pool',     label: 'M-pool' },
+    r_tx_pool:     { cls: 'buf-pool',     label: 'R-pool' },
+    inflight_m2r:  { cls: 'buf-inflight', label: '→ R' },
+    inflight_r2m:  { cls: 'buf-inflight', label: '← M' },
+    free:          { cls: 'buf-free',     label: 'free' },
+};
 
 function updateBufferView(buffers) {
     const container = document.getElementById('buffer-view');
     container.innerHTML = '';
 
     buffers.forEach(buf => {
+        const meta = BUFFER_STATE_META[buf.state] || BUFFER_STATE_META.free;
         const card = document.createElement('div');
-        card.className = 'buffer-card';
-        if (buf.len > 0) card.classList.add('has-data');
+        card.className = `buffer-card ${meta.cls}`;
 
-        const payloadText = buf.data ? hexToAsciiPreview(buf.data) : '';
+        const hasPayload = buf.len > 0 && buf.data;
+        const payloadText = hasPayload ? hexToAsciiPreview(buf.data) : '';
 
         card.innerHTML = `
             <div class="buf-header">
-                <span>Buffer[${buf.idx}]</span>
-                <span>${buf.len > 0 ? buf.len + 'B' : 'empty'}</span>
+                <span>Buf[${buf.idx}] · ${buf.dir}</span>
+                <span class="buf-tag">${meta.label}</span>
             </div>
-            ${buf.len > 0 ? `
-            <div class="buf-hdr-fields">
-                src:${buf.src} → dst:${buf.dst} flags:${buf.flags}
-            </div>
-            <div class="buf-payload" title="${buf.data}">${payloadText}</div>
-            ` : ''}
+            ${hasPayload ? `
+                <div class="buf-hdr-fields">src:${buf.src} → dst:${buf.dst} (${buf.len}B)</div>
+                <div class="buf-payload" title="${buf.data}">${payloadText}</div>
+            ` : `
+                <div class="buf-payload buf-empty">— empty —</div>
+            `}
         `;
         container.appendChild(card);
     });
@@ -294,7 +308,7 @@ function hexToAsciiPreview(hex) {
 }
 
 // ============================================================================
-// Event Log
+// Event log
 // ============================================================================
 
 const MAX_LOG_ENTRIES = 200;
@@ -302,13 +316,11 @@ let logCount = 0;
 
 function appendEvent(evt) {
     const log = document.getElementById('event-log');
-
     const entry = document.createElement('div');
     entry.className = 'event-entry';
 
     const timeStr = (evt.timestamp_us / 1000).toFixed(1) + 'ms';
     const coreClass = evt.core || '';
-
     let detail = '';
     if (evt.src || evt.dst) detail += `src:${evt.src} dst:${evt.dst} `;
     if (evt.addr) detail += `addr:${evt.addr} `;
@@ -323,17 +335,12 @@ function appendEvent(evt) {
         <span class="event-type ${coreClass}">${evt.core}:${evt.type}</span>
         <span class="event-detail">${detail}</span>
     `;
-
     log.appendChild(entry);
     logCount++;
-
-    // Trim old entries
     while (logCount > MAX_LOG_ENTRIES) {
         log.removeChild(log.firstChild);
         logCount--;
     }
-
-    // Auto-scroll
     log.scrollTop = log.scrollHeight;
 }
 
@@ -347,137 +354,107 @@ function appendLog(text, cls) {
 }
 
 // ============================================================================
-// Command Functions
+// Commands
 // ============================================================================
 
 function destroyEpt(core, addr) {
-    wsSend({ cmd: 'destroy_ept', core: core, addr: addr });
+    wsSend({ cmd: 'destroy_ept', core, addr });
+}
+
+// UTF-8 -> base64 (handles non-ASCII like Chinese characters correctly)
+function strToB64(s) {
+    const bytes = new TextEncoder().encode(s);
+    let bin = '';
+    for (const b of bytes) bin += String.fromCharCode(b);
+    return btoa(bin);
 }
 
 // ============================================================================
-// Event Bindings
+// Wiring
 // ============================================================================
 
 document.addEventListener('DOMContentLoaded', () => {
-    // Connect WebSocket
     wsConnect();
 
-    // Reset
     document.getElementById('btn-reset').addEventListener('click', () => {
         wsSend({ cmd: 'reset' });
     });
-
-    // Init Master
     document.getElementById('btn-init-master').addEventListener('click', () => {
         wsSend({ cmd: 'init_master' });
     });
-
-    // Init Remote
     document.getElementById('btn-init-remote').addEventListener('click', () => {
         wsSend({ cmd: 'init_remote' });
     });
+    document.getElementById('btn-deinit-master').addEventListener('click', () => {
+        wsSend({ cmd: 'deinit', core: 'master' });
+    });
+    document.getElementById('btn-deinit-remote').addEventListener('click', () => {
+        wsSend({ cmd: 'deinit', core: 'remote' });
+    });
 
-    // Mode change
     document.getElementById('sel-mode').addEventListener('change', (e) => {
         const delay = parseInt(document.getElementById('range-delay').value);
         wsSend({ cmd: 'set_mode', mode: e.target.value, delay_ms: delay });
     });
-
-    // Delay slider
     document.getElementById('range-delay').addEventListener('input', (e) => {
         document.getElementById('lbl-delay').textContent = e.target.value + 'ms';
     });
     document.getElementById('range-delay').addEventListener('change', (e) => {
         const mode = document.getElementById('sel-mode').value;
-        wsSend({ cmd: 'set_mode', mode: mode, delay_ms: parseInt(e.target.value) });
+        wsSend({ cmd: 'set_mode', mode, delay_ms: parseInt(e.target.value) });
     });
 
-    // Step button
     document.getElementById('btn-step').addEventListener('click', () => {
         wsSend({ cmd: 'step' });
-        document.getElementById('btn-step').disabled = true;
-        document.getElementById('btn-step').classList.remove('waiting-step');
+        const btn = document.getElementById('btn-step');
+        btn.disabled = true;
+        btn.classList.remove('waiting-step');
     });
 
-    // Master create endpoint
     document.getElementById('btn-master-create-ept').addEventListener('click', () => {
         const addr = parseInt(document.getElementById('master-ept-addr').value);
-        if (addr > 0) {
-            wsSend({ cmd: 'create_ept', core: 'master', addr: addr });
-        }
+        if (addr > 0) wsSend({ cmd: 'create_ept', core: 'master', addr });
     });
-
-    // Remote create endpoint
     document.getElementById('btn-remote-create-ept').addEventListener('click', () => {
         const addr = parseInt(document.getElementById('remote-ept-addr').value);
-        if (addr > 0) {
-            wsSend({ cmd: 'create_ept', core: 'remote', addr: addr });
-        }
+        if (addr > 0) wsSend({ cmd: 'create_ept', core: 'remote', addr });
     });
 
-    // Master send
     document.getElementById('btn-master-send').addEventListener('click', () => {
         const src = parseInt(document.getElementById('master-send-src').value);
         const dst = parseInt(document.getElementById('master-send-dst').value);
         const text = document.getElementById('master-send-data').value;
-        if (src && dst && text) {
-            const data = btoa(text); // Base64 encode
-            wsSend({ cmd: 'send', core: 'master', src: src, dst: dst, data: data });
-        }
+        if (src && dst && text)
+            wsSend({ cmd: 'send', core: 'master', src, dst, data: strToB64(text) });
     });
-
-    // Remote send
     document.getElementById('btn-remote-send').addEventListener('click', () => {
         const src = parseInt(document.getElementById('remote-send-src').value);
         const dst = parseInt(document.getElementById('remote-send-dst').value);
         const text = document.getElementById('remote-send-data').value;
-        if (src && dst && text) {
-            const data = btoa(text);
-            wsSend({ cmd: 'send', core: 'remote', src: src, dst: dst, data: data });
-        }
+        if (src && dst && text)
+            wsSend({ cmd: 'send', core: 'remote', src, dst, data: strToB64(text) });
     });
 
-    // Clear log
     document.getElementById('btn-clear-log').addEventListener('click', () => {
         document.getElementById('event-log').innerHTML = '';
         logCount = 0;
     });
 
-    // ===== Recording Controls =====
-    document.getElementById('btn-record').addEventListener('click', () => {
-        startRecording();
-    });
-
-    document.getElementById('btn-stop-record').addEventListener('click', () => {
-        stopRecording();
-    });
-
-    document.getElementById('btn-replay').addEventListener('click', () => {
-        replayRecording();
-    });
-
-    document.getElementById('btn-export-record').addEventListener('click', () => {
-        exportRecording();
-    });
-
+    // Recording controls
+    document.getElementById('btn-record').addEventListener('click', startRecording);
+    document.getElementById('btn-stop-record').addEventListener('click', stopRecording);
+    document.getElementById('btn-replay').addEventListener('click', replayRecording);
+    document.getElementById('btn-export-record').addEventListener('click', exportRecording);
     document.getElementById('btn-import-record').addEventListener('click', () => {
         document.getElementById('file-import-record').click();
     });
-
     document.getElementById('file-import-record').addEventListener('change', (e) => {
         importRecording(e.target.files[0]);
     });
-
-    // Periodic state refresh
-    setInterval(() => {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-            wsSend({ cmd: 'get_state' });
-        }
-    }, 2000);
 });
 
 // ============================================================================
-// Received Messages Display
+// Received messages list
 // ============================================================================
 
 const MAX_RX_MESSAGES = 50;
@@ -491,7 +468,6 @@ function appendRxMessage(evt) {
 
     const item = document.createElement('div');
     item.className = 'rx-message-item';
-
     const timeStr = (evt.timestamp_us / 1000).toFixed(1) + 'ms';
     const payloadText = evt.payload ? hexToAsciiPreview(evt.payload) : '';
 
@@ -499,119 +475,119 @@ function appendRxMessage(evt) {
         <div class="rx-meta">${timeStr} | src:${evt.src} → dst:${evt.dst} | ${evt.buffer_len || 0}B</div>
         <div class="rx-payload">${payloadText}</div>
     `;
-
     listEl.appendChild(item);
 
-    // Trim old entries
     if (core === 'master') {
         rxCountMaster++;
-        while (rxCountMaster > MAX_RX_MESSAGES) {
-            listEl.removeChild(listEl.firstChild);
-            rxCountMaster--;
-        }
+        while (rxCountMaster > MAX_RX_MESSAGES) { listEl.removeChild(listEl.firstChild); rxCountMaster--; }
     } else {
         rxCountRemote++;
-        while (rxCountRemote > MAX_RX_MESSAGES) {
-            listEl.removeChild(listEl.firstChild);
-            rxCountRemote--;
-        }
+        while (rxCountRemote > MAX_RX_MESSAGES) { listEl.removeChild(listEl.firstChild); rxCountRemote--; }
     }
-
     listEl.scrollTop = listEl.scrollHeight;
 }
 
 // ============================================================================
-// Operation Recording & Replay
+// Recording & replay
 // ============================================================================
 
 let isRecording = false;
 let recordedActions = [];
+let recordedSnapshots = [];
 let recordStartTime = 0;
 
 function startRecording() {
     isRecording = true;
     recordedActions = [];
+    recordedSnapshots = [];
     recordStartTime = Date.now();
-
+    if (currentState) {
+        recordedSnapshots.push({
+            timestamp: 0, trigger: 'recording_start',
+            state: JSON.parse(JSON.stringify(currentState))
+        });
+    }
     document.getElementById('btn-record').classList.add('recording');
     document.getElementById('btn-record').disabled = true;
     document.getElementById('btn-stop-record').disabled = false;
     document.getElementById('btn-replay').disabled = true;
     document.getElementById('btn-export-record').disabled = true;
-
-    appendLog('⏺ Recording started...', '');
+    appendLog('⏺ Recording...', '');
 }
 
 function stopRecording() {
     isRecording = false;
-
     document.getElementById('btn-record').classList.remove('recording');
     document.getElementById('btn-record').disabled = false;
     document.getElementById('btn-stop-record').disabled = true;
     document.getElementById('btn-replay').disabled = recordedActions.length === 0;
     document.getElementById('btn-export-record').disabled = recordedActions.length === 0;
-
-    appendLog(`⏹ Recording stopped. ${recordedActions.length} actions captured.`, '');
+    appendLog(`⏹ Stopped. ${recordedActions.length} actions, ${recordedSnapshots.length} snapshots.`, '');
 }
 
 function recordAction(cmd) {
     if (!isRecording) return;
-    recordedActions.push({
-        timestamp: Date.now() - recordStartTime,
-        cmd: cmd
-    });
+    recordedActions.push({ timestamp: Date.now() - recordStartTime, cmd });
 }
 
-// Override wsSend to intercept commands for recording
+function recordStateSnapshot(trigger, event) {
+    if (!isRecording) return;
+    const snap = {
+        timestamp: Date.now() - recordStartTime, trigger,
+        state: currentState ? JSON.parse(JSON.stringify(currentState)) : null
+    };
+    if (event) snap.event = JSON.parse(JSON.stringify(event));
+    recordedSnapshots.push(snap);
+}
+
 const originalWsSend = wsSend;
 wsSend = function(obj) {
-    // Record user-initiated commands (skip get_state polling)
-    if (obj.cmd !== 'get_state') {
-        recordAction(obj);
-    }
+    if (obj.cmd !== 'get_state') recordAction(obj);
     originalWsSend(obj);
 };
 
 async function replayRecording() {
     if (recordedActions.length === 0) return;
+    if (!confirm(`Replay ${recordedActions.length} recorded actions?\nThis will reset the simulation first.`)) return;
 
-    const confirmReplay = confirm(
-        `Replay ${recordedActions.length} recorded actions?\nThis will reset the simulation first.`
-    );
-    if (!confirmReplay) return;
-
-    // Disable replay button during playback
     document.getElementById('btn-replay').disabled = true;
-    appendLog('▶ Replaying recorded actions...', '');
-
-    // Reset first
+    appendLog('▶ Replaying...', '');
     originalWsSend({ cmd: 'reset' });
     await sleep(500);
-
     for (let i = 0; i < recordedActions.length; i++) {
         const action = recordedActions[i];
         const delay = i > 0 ? action.timestamp - recordedActions[i - 1].timestamp : action.timestamp;
-
-        // Wait for the relative delay (capped at 3 seconds for usability)
         await sleep(Math.min(delay, 3000));
-
-        appendLog(`▶ [${i + 1}/${recordedActions.length}] ${action.cmd.cmd}`, '');
+        appendLog(`▶ [${i+1}/${recordedActions.length}] ${action.cmd.cmd}`, '');
         originalWsSend(action.cmd);
     }
-
     appendLog('▶ Replay complete.', '');
     document.getElementById('btn-replay').disabled = false;
 }
 
 function exportRecording() {
-    if (recordedActions.length === 0) return;
-
+    if (recordedActions.length === 0 && recordedSnapshots.length === 0) return;
     const data = {
-        version: 1,
+        version: 2,
         timestamp: new Date().toISOString(),
-        actions: recordedActions
+        actions: recordedActions,
+        snapshots: recordedSnapshots
     };
+    const jsonStr = JSON.stringify(data, null, 2);
+    fetch('/api/save_recording', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: jsonStr
+    }).then(r => r.json()).then(res => {
+        if (res.ok) appendLog(`💾 Saved: ${res.filename}`, '');
+        else { appendLog(`Save failed: ${res.msg}`, 'error'); downloadRecording(data); }
+    }).catch(err => {
+        appendLog(`Save failed (${err.message})`, 'error');
+        downloadRecording(data);
+    });
+}
 
+function downloadRecording(data) {
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -623,7 +599,6 @@ function exportRecording() {
 
 function importRecording(file) {
     if (!file) return;
-
     const reader = new FileReader();
     reader.onload = (e) => {
         try {
@@ -633,15 +608,14 @@ function importRecording(file) {
                 return;
             }
             recordedActions = data.actions;
+            recordedSnapshots = data.snapshots || [];
             isRecording = false;
-
             document.getElementById('btn-record').classList.remove('recording');
             document.getElementById('btn-record').disabled = false;
             document.getElementById('btn-stop-record').disabled = true;
             document.getElementById('btn-replay').disabled = false;
             document.getElementById('btn-export-record').disabled = false;
-
-            appendLog(`📂 Imported ${recordedActions.length} actions from recording.`, '');
+            appendLog(`📂 Imported ${recordedActions.length} actions.`, '');
         } catch (err) {
             alert('Failed to parse recording file: ' + err.message);
         }
@@ -649,6 +623,4 @@ function importRecording(file) {
     reader.readAsText(file);
 }
 
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }

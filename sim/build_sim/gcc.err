@@ -1,0 +1,8 @@
+D:\02_Work\external_repo\kokomaya\rpmsg-lite\sim\backend\sim_core.c: In function 'classify_buffer_global':
+D:\02_Work\external_repo\kokomaya\rpmsg-lite\sim\backend\sim_core.c:674:23: warning: variable 'consumer_vq' set but not used [-Wunused-but-set-variable]
+  674 |     struct virtqueue *consumer_vq = NULL;
+      |                       ^~~~~~~~~~~
+D:\02_Work\external_repo\kokomaya\rpmsg-lite\sim\backend\sim_core.c: At top level:
+D:\02_Work\external_repo\kokomaya\rpmsg-lite\sim\backend\sim_core.c:644:12: warning: 'buffer_slot_for_addr' defined but not used [-Wunused-function]
+  644 | static int buffer_slot_for_addr(uint64_t addr, uint8_t **out_ptr)
+      |            ^~~~~~~~~~~~~~~~~~~~
