@@ -113,16 +113,31 @@ int32_t env_strncmp(char *dest, const char *src, uint32_t len)
 }
 
 /* ========================================================================== */
-/* Address Translation (identity mapping in simulation)                        */
+/* Address Translation (offset-based for 64-bit compatibility)                 */
+/* On 64-bit systems, pointers don't fit in uint32_t.                          */
+/* We use offsets from the shared memory base instead.                          */
 /* ========================================================================== */
 
 uint32_t env_map_vatopa(void *address)
 {
+    /* Convert virtual address to "physical" = offset from shmem base */
+    if (g_sim_shmem_base && address >= (void *)g_sim_shmem_base &&
+        address < (void *)(g_sim_shmem_base + g_sim_shmem_size))
+    {
+        return (uint32_t)((uint8_t *)address - g_sim_shmem_base);
+    }
+    /* Fallback: shouldn't happen in normal operation */
     return (uint32_t)(uintptr_t)address;
 }
 
 void *env_map_patova(uint32_t address)
 {
+    /* Convert "physical" offset back to virtual address */
+    if (g_sim_shmem_base && address < g_sim_shmem_size)
+    {
+        return (void *)(g_sim_shmem_base + address);
+    }
+    /* Fallback */
     return (void *)(uintptr_t)address;
 }
 

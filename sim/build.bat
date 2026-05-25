@@ -12,7 +12,7 @@ if not exist "%BUILD_DIR%" mkdir "%BUILD_DIR%"
 echo Building RPMsg-Lite Simulator...
 
 %GCC% -Wall -Wno-unused-parameter -O2 -std=c11 ^
-    -DRL_USE_STATIC_API=1 -DSIM_BUILD=1 -D_CRT_SECURE_NO_WARNINGS -DMG_ENABLE_WINSOCK=1 ^
+    -DRL_USE_STATIC_API=1 -DSIM_BUILD=1 -D_CRT_SECURE_NO_WARNINGS -DMG_ENABLE_WINSOCK=1 -DMG_ENABLE_LOG=0 ^
     -I"%LIB_DIR%\include" ^
     -I"%SCRIPT_DIR%backend" ^
     -I"%SCRIPT_DIR%third_party\mongoose" ^

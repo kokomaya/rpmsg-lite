@@ -322,6 +322,9 @@ int main(void)
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
+    setbuf(stdout, NULL);
+    setbuf(stderr, NULL);
+
     printf("=== RPMsg-Lite Web Simulator ===\n");
     printf("Buffer count: %u per direction\n", (unsigned)RL_BUFFER_COUNT);
     printf("Buffer payload size: %u bytes\n", (unsigned)RL_BUFFER_PAYLOAD_SIZE);

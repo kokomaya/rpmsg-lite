@@ -74,6 +74,10 @@ function handleMessage(msg) {
             break;
         case 'event':
             appendEvent(msg.event);
+            // Track received messages
+            if (msg.event.type === 'rx_callback') {
+                appendRxMessage(msg.event);
+            }
             // Request fresh state after each event
             wsSend({ cmd: 'get_state' });
             break;
@@ -439,6 +443,31 @@ document.addEventListener('DOMContentLoaded', () => {
         logCount = 0;
     });
 
+    // ===== Recording Controls =====
+    document.getElementById('btn-record').addEventListener('click', () => {
+        startRecording();
+    });
+
+    document.getElementById('btn-stop-record').addEventListener('click', () => {
+        stopRecording();
+    });
+
+    document.getElementById('btn-replay').addEventListener('click', () => {
+        replayRecording();
+    });
+
+    document.getElementById('btn-export-record').addEventListener('click', () => {
+        exportRecording();
+    });
+
+    document.getElementById('btn-import-record').addEventListener('click', () => {
+        document.getElementById('file-import-record').click();
+    });
+
+    document.getElementById('file-import-record').addEventListener('change', (e) => {
+        importRecording(e.target.files[0]);
+    });
+
     // Periodic state refresh
     setInterval(() => {
         if (ws && ws.readyState === WebSocket.OPEN) {
@@ -446,3 +475,180 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }, 2000);
 });
+
+// ============================================================================
+// Received Messages Display
+// ============================================================================
+
+const MAX_RX_MESSAGES = 50;
+let rxCountMaster = 0;
+let rxCountRemote = 0;
+
+function appendRxMessage(evt) {
+    const core = evt.core;
+    const listEl = document.getElementById(`${core}-rx-list`);
+    if (!listEl) return;
+
+    const item = document.createElement('div');
+    item.className = 'rx-message-item';
+
+    const timeStr = (evt.timestamp_us / 1000).toFixed(1) + 'ms';
+    const payloadText = evt.payload ? hexToAsciiPreview(evt.payload) : '';
+
+    item.innerHTML = `
+        <div class="rx-meta">${timeStr} | src:${evt.src} → dst:${evt.dst} | ${evt.buffer_len || 0}B</div>
+        <div class="rx-payload">${payloadText}</div>
+    `;
+
+    listEl.appendChild(item);
+
+    // Trim old entries
+    if (core === 'master') {
+        rxCountMaster++;
+        while (rxCountMaster > MAX_RX_MESSAGES) {
+            listEl.removeChild(listEl.firstChild);
+            rxCountMaster--;
+        }
+    } else {
+        rxCountRemote++;
+        while (rxCountRemote > MAX_RX_MESSAGES) {
+            listEl.removeChild(listEl.firstChild);
+            rxCountRemote--;
+        }
+    }
+
+    listEl.scrollTop = listEl.scrollHeight;
+}
+
+// ============================================================================
+// Operation Recording & Replay
+// ============================================================================
+
+let isRecording = false;
+let recordedActions = [];
+let recordStartTime = 0;
+
+function startRecording() {
+    isRecording = true;
+    recordedActions = [];
+    recordStartTime = Date.now();
+
+    document.getElementById('btn-record').classList.add('recording');
+    document.getElementById('btn-record').disabled = true;
+    document.getElementById('btn-stop-record').disabled = false;
+    document.getElementById('btn-replay').disabled = true;
+    document.getElementById('btn-export-record').disabled = true;
+
+    appendLog('⏺ Recording started...', '');
+}
+
+function stopRecording() {
+    isRecording = false;
+
+    document.getElementById('btn-record').classList.remove('recording');
+    document.getElementById('btn-record').disabled = false;
+    document.getElementById('btn-stop-record').disabled = true;
+    document.getElementById('btn-replay').disabled = recordedActions.length === 0;
+    document.getElementById('btn-export-record').disabled = recordedActions.length === 0;
+
+    appendLog(`⏹ Recording stopped. ${recordedActions.length} actions captured.`, '');
+}
+
+function recordAction(cmd) {
+    if (!isRecording) return;
+    recordedActions.push({
+        timestamp: Date.now() - recordStartTime,
+        cmd: cmd
+    });
+}
+
+// Override wsSend to intercept commands for recording
+const originalWsSend = wsSend;
+wsSend = function(obj) {
+    // Record user-initiated commands (skip get_state polling)
+    if (obj.cmd !== 'get_state') {
+        recordAction(obj);
+    }
+    originalWsSend(obj);
+};
+
+async function replayRecording() {
+    if (recordedActions.length === 0) return;
+
+    const confirmReplay = confirm(
+        `Replay ${recordedActions.length} recorded actions?\nThis will reset the simulation first.`
+    );
+    if (!confirmReplay) return;
+
+    // Disable replay button during playback
+    document.getElementById('btn-replay').disabled = true;
+    appendLog('▶ Replaying recorded actions...', '');
+
+    // Reset first
+    originalWsSend({ cmd: 'reset' });
+    await sleep(500);
+
+    for (let i = 0; i < recordedActions.length; i++) {
+        const action = recordedActions[i];
+        const delay = i > 0 ? action.timestamp - recordedActions[i - 1].timestamp : action.timestamp;
+
+        // Wait for the relative delay (capped at 3 seconds for usability)
+        await sleep(Math.min(delay, 3000));
+
+        appendLog(`▶ [${i + 1}/${recordedActions.length}] ${action.cmd.cmd}`, '');
+        originalWsSend(action.cmd);
+    }
+
+    appendLog('▶ Replay complete.', '');
+    document.getElementById('btn-replay').disabled = false;
+}
+
+function exportRecording() {
+    if (recordedActions.length === 0) return;
+
+    const data = {
+        version: 1,
+        timestamp: new Date().toISOString(),
+        actions: recordedActions
+    };
+
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `rpmsg-sim-recording-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+function importRecording(file) {
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            const data = JSON.parse(e.target.result);
+            if (!data.actions || !Array.isArray(data.actions)) {
+                alert('Invalid recording file format.');
+                return;
+            }
+            recordedActions = data.actions;
+            isRecording = false;
+
+            document.getElementById('btn-record').classList.remove('recording');
+            document.getElementById('btn-record').disabled = false;
+            document.getElementById('btn-stop-record').disabled = true;
+            document.getElementById('btn-replay').disabled = false;
+            document.getElementById('btn-export-record').disabled = false;
+
+            appendLog(`📂 Imported ${recordedActions.length} actions from recording.`, '');
+        } catch (err) {
+            alert('Failed to parse recording file: ' + err.message);
+        }
+    };
+    reader.readAsText(file);
+}
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}

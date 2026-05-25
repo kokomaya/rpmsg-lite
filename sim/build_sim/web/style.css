@@ -468,6 +468,57 @@ input[type="range"] {
     animation: pulse 1s infinite;
 }
 
+/* ===== Received Messages ===== */
+.rx-message-list {
+    max-height: 120px;
+    overflow-y: auto;
+    font-size: 0.8em;
+}
+
+.rx-message-item {
+    background: var(--bg-dark);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 4px 8px;
+    margin: 3px 0;
+    font-family: 'Consolas', monospace;
+}
+
+.rx-message-item .rx-meta {
+    color: var(--text-secondary);
+    font-size: 0.85em;
+}
+
+.rx-message-item .rx-payload {
+    color: var(--success);
+    word-break: break-all;
+}
+
+/* ===== Recording Controls ===== */
+.timeline-actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+#btn-record {
+    color: var(--error);
+}
+
+#btn-record.recording {
+    background: var(--error);
+    color: #fff;
+    animation: pulse 1s infinite;
+}
+
+#btn-stop-record {
+    color: var(--text-secondary);
+}
+
+#btn-replay {
+    color: var(--success);
+}
+
 /* Responsive */
 @media (max-width: 1200px) {
     #main-area {

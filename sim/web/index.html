@@ -56,6 +56,9 @@
                 <input type="text" id="master-send-data" placeholder="Text payload">
                 <button id="btn-master-send">Send →</button>
             </div>
+
+            <h3>Received Messages</h3>
+            <div id="master-rx-list" class="rx-message-list"></div>
         </section>
 
         <!-- Shared Memory View -->
@@ -107,6 +110,9 @@
                 <input type="text" id="remote-send-data" placeholder="Text payload">
                 <button id="btn-remote-send">← Send</button>
             </div>
+
+            <h3>Received Messages</h3>
+            <div id="remote-rx-list" class="rx-message-list"></div>
         </section>
     </main>
 
@@ -114,7 +120,15 @@
     <footer id="timeline">
         <div class="timeline-header">
             <h3>Event Timeline</h3>
-            <button id="btn-clear-log">Clear</button>
+            <div class="timeline-actions">
+                <button id="btn-record" title="Start recording operations">⏺ Record</button>
+                <button id="btn-stop-record" title="Stop recording" disabled>⏹ Stop</button>
+                <button id="btn-replay" title="Replay recorded operations" disabled>▶ Replay</button>
+                <button id="btn-export-record" title="Export recording" disabled>💾 Export</button>
+                <input type="file" id="file-import-record" accept=".json" style="display:none">
+                <button id="btn-import-record" title="Import recording">📂 Import</button>
+                <button id="btn-clear-log">Clear</button>
+            </div>
         </div>
         <div id="event-log" class="event-log"></div>
     </footer>

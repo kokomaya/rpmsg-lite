@@ -1,5 +1,48 @@
 # RPMsg-Lite Web Simulator 使用指南
 
+## 术语表
+
+| 术语 | 英文全称 | 说明 |
+|------|----------|------|
+| **RPMsg** | Remote Processor Messaging | 处理器间通信协议，用于多核 SoC 中核间消息传递 |
+| **VirtIO** | Virtual I/O | 一种标准化的虚拟设备 I/O 框架，RPMsg 基于此实现传输层 |
+| **VirtQueue** | Virtual Queue | VirtIO 的传输队列，管理描述符和数据缓冲区的生产者-消费者队列 |
+| **VRing** | Virtio Ring | VirtQueue 的底层环形缓冲区结构，包含 Descriptor Table、Available Ring 和 Used Ring |
+| **Descriptor (描述符)** | Vring Descriptor | 描述一个数据缓冲区的元数据（地址、长度、标志、链接下一个描述符的索引） |
+| **Available Ring** | — | 生产者（发送方）写入的环，告知消费者哪些描述符已准备好数据 |
+| **Used Ring** | — | 消费者（接收方）写入的环，告知生产者哪些描述符已被处理完毕可以回收 |
+| **Shared Memory (共享内存)** | — | Master 和 Remote 共同可见的物理内存区域，存放 VRing 结构和数据缓冲区 |
+| **Master** | — | 负责初始化共享内存和 VRing 的核心（通常是主处理器，如 Cortex-A） |
+| **Remote** | — | 使用 Master 已初始化的共享内存进行通信的核心（通常是协处理器，如 Cortex-M） |
+| **Endpoint (端点)** | — | 通信的逻辑地址，类似于网络中的端口号。每个端点有唯一地址（1–65534） |
+| **Channel (通道)** | — | 一对已绑定的端点之间的逻辑连接 |
+| **Name Service (NS)** | — | 端点名称公告服务，Remote 通过广播端点名称让 Master 动态发现可用服务 |
+| **Link State** | — | 通信链路状态。Master/Remote 初始化完成且 VRing 就绪后链路变为 UP |
+| **Payload (有效载荷)** | — | 用户实际发送的数据内容（不含 RPMsg 协议头） |
+| **RPMsg Header** | — | 每条消息前 16 字节的协议头，包含 src（源地址）、dst（目标地址）、len（长度）、flags |
+| **Buffer** | — | 共享内存中的固定大小数据块，用于承载一条完整的 RPMsg 消息（Header + Payload） |
+| **Kick / Notify** | — | 发送方填好数据后通过中断/信号通知对端有新消息可读 |
+| **TX (发送)** | Transmit | 本端向对端发送消息的方向 |
+| **RX (接收)** | Receive | 从对端收到消息的方向 |
+
+### 数据流简述
+
+```
+Master:EPT30                                Remote:EPT40
+     │                                          │
+     │  1. 从空闲链取 buffer                       │
+     │  2. 填写 RPMsg Header + Payload            │
+     │  3. 将 desc_idx 写入 Available Ring         │
+     │  4. Kick (通知 Remote)  ──────────────────→ │
+     │                                          │  5. 从 Available Ring 读取 desc_idx
+     │                                          │  6. 读取 buffer 内容 → RX callback
+     │                                          │  7. 将 desc_idx 写入 Used Ring
+     │  8. 回收 buffer (Used Ring)  ←──────────── │
+     │                                          │
+```
+
+---
+
 ## 快速开始
 
 ### 构建
@@ -93,7 +136,17 @@ cd sim/build_sim
 - **Buffer 内容**: 显示 Header (src, dst, len, flags) 和 Payload 的十六进制/ASCII
 - **Event Timeline**: 按时间顺序显示每个内部操作
 
-### 5. 反初始化
+### 5. 接收消息
+
+消息发送后，接收方的 **Received Messages** 面板会自动显示收到的消息：
+
+- 每条接收记录显示：时间戳、源地址 → 目标地址、数据长度
+- Payload 内容以 ASCII 形式显示（不可打印字符显示为 `.`）
+- 最多保留最近 50 条接收记录
+
+> 完整的 发送→接收 流程：Master:30 发送 "Hello" → Remote:40 的 **Received Messages** 中自动出现该消息
+
+### 6. 反初始化
 
 - 点击 **Reset** 完全重置仿真
 - 或通过 WebSocket 发送 `{"cmd":"deinit","core":"master"}` 反初始化单侧
@@ -208,6 +261,47 @@ ws.send(JSON.stringify({cmd: "reset"}));
 | 共享内存总大小 | 4608 | 自动计算 |
 
 修改 `rpmsg_config.h` 后重新编译即可改变配置。
+
+---
+
+## 操作录制与回放
+
+支持录制用户的操作序列，方便后续回放复现操作流程或用于演示/教学。
+
+### 录制操作
+
+1. 点击 Event Timeline 区域的 **⏺ Record** 按钮开始录制
+2. 正常执行操作（初始化、创建端点、发送消息等）
+3. 点击 **⏹ Stop** 结束录制
+
+录制期间，所有用户发起的命令都会被记录（包含相对时间戳）。
+
+### 回放操作
+
+1. 点击 **▶ Replay** 按钮
+2. 系统会自动 Reset 仿真，然后按照录制的时间间隔依次重放每个操作
+3. Event Timeline 中显示回放进度
+
+> 回放时每个操作间的等待时间上限为 3 秒，避免因长时间空闲等待
+
+### 导出/导入录制
+
+- **💾 Export**: 将录制导出为 JSON 文件，可保存到本地
+- **📂 Import**: 从 JSON 文件导入之前保存的录制
+
+导出的 JSON 格式：
+```json
+{
+  "version": 1,
+  "timestamp": "2026-05-25T10:00:00.000Z",
+  "actions": [
+    { "timestamp": 0, "cmd": { "cmd": "init_master" } },
+    { "timestamp": 1200, "cmd": { "cmd": "init_remote" } },
+    { "timestamp": 2500, "cmd": { "cmd": "create_ept", "core": "master", "addr": 30 } },
+    ...
+  ]
+}
+```
 
 ---
 
